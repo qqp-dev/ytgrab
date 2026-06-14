@@ -39,6 +39,21 @@ thin, resilient wrapper around it:
   every video fails at the merge, so ytgrab refuses to start until it is
   installed.
 
+## Check your setup
+
+Before a download — or when something won't run — ask ytgrab what it needs:
+
+```
+python3 ytgrab.py --check
+```
+
+It prints one pass/fail line per requirement (Python, yt-dlp **and whether
+it has gone stale**, ffmpeg, zenity for the launcher, the config, and the
+output folder's space and writability), then says `ready` or names exactly
+what to fix. It needs no config — run it first on a fresh machine. This is
+the quickest way to find trouble: a stale yt-dlp reads YouTube empty
+without erroring, and `--check` catches that before a run wastes time.
+
 ## Use
 
 1. First run writes `config.json` from the example and stops:

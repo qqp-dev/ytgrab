@@ -346,8 +346,111 @@ def run(cfg):
         sys.exit(3)
 
 
+def _ytdlp_age_days(ver):
+    """yt-dlp's version is its release date, YYYY.MM.DD (e.g. 2026.06.09).
+    Turn it into an age in days so the preflight can warn before a stale
+    copy reads YouTube empty — the failure that returns nothing rather than
+    erroring. None if the string doesn't parse."""
+    try:
+        y, m, d = (int(p) for p in ver.split(".")[:3])
+        return (datetime.now().date() - datetime(y, m, d).date()).days
+    except Exception:
+        return None
+
+
+def doctor(path):
+    """Preflight — check everything a run needs and print a clear pass/fail
+    list, so trouble is found in one command before a download is attempted,
+    and so the person this was made for can self-diagnose their setup. Exits
+    0 when ready to run, 1 when a required check fails. Needs no valid config:
+    a fresh machine can run it first."""
+    checks = []  # (ok, required, label, fix-line)
+
+    v = sys.version_info
+    checks.append((v >= (3, 8), True, "Python %d.%d.%d" % v[:3],
+                   "need Python 3.8 or newer"))
+
+    try:
+        import yt_dlp
+        ver = yt_dlp.version.__version__
+        age = _ytdlp_age_days(ver)
+        if age is None:
+            checks.append((True, True, "yt-dlp %s" % ver,
+                           "version date unreadable — update if channels read empty"))
+        elif age > 120:
+            checks.append((False, True, "yt-dlp %s — %d days old" % (ver, age),
+                           "stale; YouTube changes often and an old yt-dlp reads "
+                           "channels empty. Update: pip install -U yt-dlp"))
+        else:
+            checks.append((True, True, "yt-dlp %s (%d days old)" % (ver, age), ""))
+    except Exception:
+        checks.append((False, True, "yt-dlp",
+                       "not installed — pip install -U yt-dlp"))
+
+    checks.append((shutil.which("ffmpeg") is not None, True, "ffmpeg",
+                   "not installed — sudo apt install ffmpeg "
+                   "(yt-dlp needs it to merge each video's picture and sound)"))
+
+    checks.append((shutil.which("zenity") is not None, False,
+                   "zenity (one-click launcher only)",
+                   "not installed — sudo apt install zenity; only the .desktop "
+                   "launcher's dialogs need it, the command line does not"))
+
+    cfg = None
+    name = os.path.basename(path)
+    if not os.path.exists(path):
+        checks.append((False, True, "config %s" % name,
+                       "missing — run `python3 ytgrab.py` once to write it from "
+                       "the example, then set channel and output"))
+    else:
+        try:
+            cfg = json.load(open(path))
+        except Exception as e:
+            checks.append((False, True, "config %s" % name, "invalid JSON: %s" % e))
+        else:
+            ok = bool(cfg.get("channel") and cfg.get("output"))
+            checks.append((ok, True, "config: channel and output set",
+                           "" if ok else "set both `channel` and `output` in %s" % path))
+
+    if cfg and cfg.get("output"):
+        out = os.path.expanduser(cfg["output"])
+        floor = cfg.get("min_free_gb", 2)
+        if os.path.isdir(out):
+            free = free_gb(out)
+            checks.append((free >= floor, True,
+                           "output %s — %.1f GB free" % (out, free),
+                           "" if free >= floor else "below the %s GB floor" % floor))
+            checks.append((os.access(out, os.W_OK), True, "output is writable",
+                           "" if os.access(out, os.W_OK) else "no write permission to %s" % out))
+        else:
+            parent = os.path.dirname(out) or "."
+            ok = os.path.isdir(parent) and os.access(parent, os.W_OK)
+            checks.append((ok, True, "output %s (created on first run)" % out,
+                           "" if ok else "parent %s is missing or not writable" % parent))
+
+    print("ytgrab preflight\n")
+    ready = True
+    for ok, required, label, fix in checks:
+        mark = "OK  " if ok else ("FAIL" if required else "warn")
+        print("  [%s] %s" % (mark, label))
+        if fix and not ok:
+            print("         %s" % fix)
+        if not ok and required:
+            ready = False
+    print()
+    if ready:
+        print("ready — `python3 ytgrab.py` will run. (any 'warn' item is optional.)")
+        return 0
+    print("not ready — fix the FAIL items above, then re-run: python3 ytgrab.py --check")
+    return 1
+
+
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CONFIG
+    args = sys.argv[1:]
+    if args and args[0] in ("--check", "-c", "doctor"):
+        path = args[1] if len(args) > 1 else DEFAULT_CONFIG
+        sys.exit(doctor(path))
+    path = args[0] if args else DEFAULT_CONFIG
     run(load_config(path))
 
 
