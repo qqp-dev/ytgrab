@@ -485,7 +485,20 @@ def doctor(path):
     return 1
 
 
+def _ensure_runtime_on_path():
+    """yt-dlp needs a JS runtime (deno) on PATH, but the official deno
+    installer puts it in ~/.deno/bin — which a GUI/.desktop launch's
+    non-interactive shell never loads, so a click would still find no
+    runtime. Prepend the common location so a click finds deno the same as
+    a terminal does."""
+    bindir = os.path.expanduser("~/.deno/bin")
+    path = os.environ.get("PATH", "")
+    if os.path.isdir(bindir) and bindir not in path.split(os.pathsep):
+        os.environ["PATH"] = bindir + os.pathsep + path
+
+
 def main():
+    _ensure_runtime_on_path()
     args = sys.argv[1:]
     if args and args[0] in ("--check", "-c", "doctor"):
         path = args[1] if len(args) > 1 else DEFAULT_CONFIG
