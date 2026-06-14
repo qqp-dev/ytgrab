@@ -24,8 +24,14 @@ thin, resilient wrapper around it:
 ## Requirements
 
 - Python 3
-- `yt-dlp` (the Python module; `pip install yt-dlp` or your distro's
-  package). ffmpeg is needed to merge video+audio above 720p-progressive.
+- `yt-dlp` (the Python module; `pip install yt-dlp`). Keep it current —
+  `pip install -U yt-dlp` — because YouTube changes often and a yt-dlp more
+  than a few months old can stop reading channels entirely, returning
+  nothing rather than erroring.
+- `ffmpeg` (`sudo apt install ffmpeg`). yt-dlp downloads picture and sound
+  as separate streams and merges them into one mp4 with ffmpeg; without it
+  every video fails at the merge, so ytgrab refuses to start until it is
+  installed.
 
 ## Use
 
