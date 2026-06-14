@@ -16,25 +16,43 @@ err() { zenity --error --title="ytgrab" --text="$1" 2>/dev/null; exit 0; }
 command -v ffmpeg >/dev/null 2>&1 || err \
     "ffmpeg is not installed.\nyt-dlp needs it to merge each video's picture and sound into one mp4.\nInstall it with:  sudo apt install ffmpeg"
 
-config_ok() {
-    "$PY" - "$CONFIG" <<'PY' 2>/dev/null
-import json, sys
+# Read one config field (channel / output), output expanded, or empty.
+cfg_get() {
+    "$PY" - "$CONFIG" "$1" <<'PY' 2>/dev/null
+import json, os, sys
 try:
     c = json.load(open(sys.argv[1]))
 except Exception:
-    sys.exit(1)
-sys.exit(0 if c.get("channel") and c.get("output") else 1)
+    c = {}
+v = c.get(sys.argv[2]) or ""
+print(os.path.expanduser(v) if sys.argv[2] == "output" else v)
 PY
 }
 
-# first run (or an incomplete config): ask, with dialogs, never a terminal
-if ! config_ok; then
+channel="$(cfg_get channel)"
+OUT="$(cfg_get output)"
+
+# Has anything actually downloaded for this config yet? yt-dlp records every
+# saved video in the archive, so a missing or empty archive means the channel
+# has never yielded one — a wrong handle, or an outdated yt-dlp that reads
+# nothing. Until the first video lands there is nothing to resume, and the
+# channel might be wrong, so re-offer it (pre-filled) on every click. Once a
+# video is saved, a click just resumes — silently, no dialog. This is the fix
+# for the operator's "it remembered the old link and doesn't prompt me to
+# change it": a mistaken channel is always correctable until it works.
+downloaded=0
+[ -n "$OUT" ] && [ -s "$OUT/.ytgrab/archive.txt" ] && downloaded=1
+
+if [ -z "$channel" ] || [ -z "$OUT" ] || [ "$downloaded" -eq 0 ]; then
     channel=$(zenity --entry --title="ytgrab — channel" \
-        --text="Paste the YouTube channel URL or @handle:") || exit 0
+        --entry-text="$channel" \
+        --text="Paste the YouTube channel link (a full URL is surest, e.g. https://www.youtube.com/@NAME ; a bare @handle also works):") || exit 0
     [ -n "$channel" ] || err "No channel given — nothing saved."
-    folder=$(zenity --file-selection --directory \
-        --title="ytgrab — choose where to save the videos") || exit 0
-    "$PY" - "$CONFIG" "$channel" "$folder" <<'PY' || err "Could not write the config."
+    if [ -z "$OUT" ]; then
+        OUT=$(zenity --file-selection --directory \
+            --title="ytgrab — choose where to save the videos") || exit 0
+    fi
+    "$PY" - "$CONFIG" "$channel" "$OUT" <<'PY' || err "Could not write the config."
 import json, os, sys
 path, channel, folder = sys.argv[1], sys.argv[2], sys.argv[3]
 cfg = {}
@@ -56,7 +74,6 @@ fi
 # already downloading? the core holds an flock on the lock file; a shell
 # flock(2) attempt on the same file conflicts with it, so this detects a
 # live run without starting a second
-OUT="$("$PY" -c "import json,os;print(os.path.expanduser(json.load(open('$CONFIG'))['output']))" 2>/dev/null)"
 LOCK="$OUT/.ytgrab/ytgrab.lock"
 if [ -e "$LOCK" ] && ! flock -n "$LOCK" -c true 2>/dev/null; then
     zenity --info --title="ytgrab" \
