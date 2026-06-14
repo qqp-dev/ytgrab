@@ -13,6 +13,8 @@ err() { zenity --error --title="ytgrab" --text="$1" 2>/dev/null; exit 0; }
 [ -n "$PY" ] || err "python3 is not installed."
 "$PY" -c "import yt_dlp" 2>/dev/null || err \
     "yt-dlp (the Python module) is not installed.\nInstall it with:  pip install yt-dlp"
+command -v ffmpeg >/dev/null 2>&1 || err \
+    "ffmpeg is not installed.\nyt-dlp needs it to merge each video's picture and sound into one mp4.\nInstall it with:  sudo apt install ffmpeg"
 
 config_ok() {
     "$PY" - "$CONFIG" <<'PY' 2>/dev/null
