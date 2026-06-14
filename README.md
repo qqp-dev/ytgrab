@@ -8,8 +8,14 @@ thin, resilient wrapper around it:
 
 - **Chronological** — oldest upload first (`playlistreverse`), filenames
   prefixed with the upload date so the folder sorts the same way.
-- **Never rate-limited** — a randomised sleep before each video and a
-  small gap between API calls. Slow on purpose.
+- **Paced, and backs off when pushed** — a randomised sleep before each
+  video, a throttled gap between the metadata requests that enumerate the
+  channel at the start, and real rate-limit backoff: if YouTube ever
+  pushes back (an HTTP 429, a "confirm you're not a bot" challenge), it
+  pauses and *lengthens* the gap for the rest of the run instead of
+  retrying into the same wall. Slow on purpose — but it can't promise
+  *never*: a logged-out bulk run can still draw a bot-check however slowly
+  it sleeps, which is what the optional cookie auth below is for.
 - **Resumable** — a download-archive records every finished video, so a
   rerun skips what is done; a partial file keeps its `.part` and
   continues. Stop it any time (Ctrl-C, logout, crash, reboot) and run it
@@ -44,14 +50,18 @@ thin, resilient wrapper around it:
 2. Edit `config.json` — set `channel` (the channel URL or `@handle`) and
    `output` (the local folder). The rest have sensible defaults:
 
-   | key          | meaning                                   | default          |
-   |--------------|-------------------------------------------|------------------|
-   | `channel`    | channel URL or `@handle`                  | —                |
-   | `output`     | where videos go (`~` expands)             | —                |
-   | `max_height` | quality cap in pixels                     | `720`            |
-   | `sleep_min`  | min seconds before each video             | `8`              |
-   | `sleep_max`  | max seconds before each video             | `20`             |
-   | `min_free_gb`| stop if free space falls below this        | `2`              |
+   | key                   | meaning                                          | default |
+   |-----------------------|--------------------------------------------------|---------|
+   | `channel`             | channel URL or `@handle`                         | —       |
+   | `output`              | where videos go (`~` expands)                    | —       |
+   | `max_height`          | quality cap in pixels                            | `720`   |
+   | `sleep_min`           | min seconds before each video                    | `8`     |
+   | `sleep_max`           | max seconds before each video                    | `20`    |
+   | `sleep_requests`      | seconds between metadata requests (throttles the start-of-run enumeration) | `2` |
+   | `backoff_max`         | ceiling (s) the per-video gap and a rate-limit pause grow to | `300` |
+   | `min_free_gb`         | stop if free space falls below this              | `2`     |
+   | `cookies_from_browser`| browser to read YouTube cookies from (`firefox`, `chrome`, …) — off when unset | `null` |
+   | `cookiefile`          | path to an exported `cookies.txt` — off when unset | `null` |
 
 3. Run it again to start downloading:
 
@@ -61,6 +71,26 @@ thin, resilient wrapper around it:
 
    Progress prints to the screen and appends to
    `<output>/.ytgrab/ytgrab.log`, which you can `tail -f`.
+
+## Rate limits — honest version
+
+The pacing is deliberately polite, but no download tool can *promise* it
+will never be rate-limited: what trips YouTube's bot-check on a bulk run is
+mostly login state and IP reputation, not the gap between videos. So ytgrab
+does two things instead of overclaiming:
+
+- **It backs off when pushed.** If a run meets a 429 or a "confirm you're
+  not a bot" challenge, it pauses to let the limit clear and lengthens the
+  per-video gap for the rest of the run (doubling each time it's hit, up to
+  `backoff_max`), rather than retrying straight back into the wall. The log
+  says so when it happens.
+- **It can carry your session.** Set `cookies_from_browser` to a browser
+  name (e.g. `firefox`) and the run uses your logged-in YouTube cookies
+  instead of running logged-out, which is what most often avoids the
+  bot-check on a large channel. Alternatively point `cookiefile` at an
+  exported `cookies.txt`. **Both are off by default, on purpose:** turning
+  either on hands this tool your YouTube session, so it's your call, not the
+  default.
 
 ## One-click launcher
 
