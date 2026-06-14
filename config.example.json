@@ -1,0 +1,8 @@
+{
+  "channel": "https://www.youtube.com/@ExampleChannel/videos",
+  "output": "~/Videos/ytgrab",
+  "max_height": 720,
+  "sleep_min": 8,
+  "sleep_max": 20,
+  "min_free_gb": 2
+}
