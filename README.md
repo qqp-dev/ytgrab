@@ -62,5 +62,15 @@ thin, resilient wrapper around it:
    Progress prints to the screen and appends to
    `<output>/.ytgrab/ytgrab.log`, which you can `tail -f`.
 
-A desktop shortcut that starts-or-resumes with one click, detached, is
-the next slice.
+## One-click launcher
+
+`ytgrab-launch.sh` (installed to the applications menu as `ytgrab.desktop`)
+starts or resumes the download with one click, detached — no terminal to open,
+no `config.json` to edit. The first click asks for the channel and the save
+folder with dialogs; a later click resumes. If a channel has downloaded
+nothing yet (a wrong handle, or an outdated yt-dlp that reads YouTube empty),
+each click re-offers the channel — pre-filled, so a mistake is always
+correctable and you are never stuck with a wrong link — until the first video
+lands, after which clicks resume silently. The core's lock means a second
+click never double-runs. A full channel URL is surest; a bare `@handle` also
+works.
