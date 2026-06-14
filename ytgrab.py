@@ -42,6 +42,22 @@ def log(state_dir, msg):
         pass
 
 
+def channel_url(channel):
+    """yt-dlp needs a real URL — handed a bare `@handle` it refuses with
+    "'@handle' is not a valid URL" and, under ignoreerrors, downloads
+    nothing. Both the config and the launcher invite an @handle, so turn
+    one into the channel's videos page here. Full URLs pass through."""
+    c = channel.strip()
+    if "://" in c:
+        return c
+    if c.startswith("@"):
+        return "https://www.youtube.com/%s/videos" % c
+    if c.startswith(("www.", "youtube.com", "m.youtube.com")):
+        return "https://%s" % c
+    # a bare word — the only meaning ytgrab has for it is a handle
+    return "https://www.youtube.com/@%s/videos" % c
+
+
 def load_config(path):
     """The config, or a written template and a clear exit. Required keys:
     channel (the channel URL or @handle) and output (the local folder).
@@ -56,6 +72,7 @@ def load_config(path):
         cfg = json.load(f)
     if not cfg.get("channel") or not cfg.get("output"):
         sys.exit("config %s needs both `channel` and `output` set." % path)
+    cfg["channel"] = channel_url(cfg["channel"])
     cfg["output"] = os.path.expanduser(cfg["output"])
     cfg.setdefault("max_height", 720)
     cfg.setdefault("sleep_min", 8)        # seconds before each video
@@ -119,15 +136,16 @@ def run(cfg):
 
     archive = os.path.join(state_dir, "archive.txt")
     h = cfg["max_height"]
-    done = {"file": None}
+    tally = {"file": None, "attempted": 0, "saved": 0}
 
     def hook(d):
         # at the start of each new file, guard the disk; mid-file the OS
         # error and the resumable .part cover a sudden fill
         if d.get("status") == "downloading":
             fn = d.get("filename")
-            if fn != done["file"]:
-                done["file"] = fn
+            if fn != tally["file"]:
+                tally["file"] = fn
+                tally["attempted"] += 1
                 if free_gb(out) < min_free:
                     raise LowSpace()
                 idx = d.get("info_dict", {}).get("playlist_index")
@@ -136,6 +154,7 @@ def run(cfg):
                 where = ("%s/%s" % (idx, n)) if idx and n else "?"
                 log(state_dir, "downloading %s: %s" % (where, title))
         elif d.get("status") == "finished":
+            tally["saved"] += 1
             log(state_dir, "saved: %s" % os.path.basename(d.get("filename", "?")))
 
     opts = {
@@ -172,8 +191,35 @@ def run(cfg):
         sys.exit(2)
     finally:
         lock.close()
-    log(state_dir, "done — every available video is downloaded "
-                   "(rerun any time to pick up new uploads).")
+
+    # What actually happened — never report success on a no-op. yt-dlp under
+    # ignoreerrors swallows extraction failures (a wrong handle, or an
+    # outdated yt-dlp that can no longer read YouTube) and returns as if
+    # done; a finished run that saved nothing must say so, not lie "done".
+    try:
+        with open(archive) as f:
+            archived = sum(1 for _ in f)
+    except OSError:
+        archived = 0
+
+    if tally["saved"]:
+        log(state_dir, "done — saved %d new video(s) this run; %d downloaded "
+            "in all (rerun any time to pick up new uploads)."
+            % (tally["saved"], archived))
+    elif archived:
+        log(state_dir, "up to date — every video already downloaded (%d in "
+            "all); nothing new this run." % archived)
+    elif tally["attempted"]:
+        log(state_dir, "WARNING: found %d video(s) but saved none — every "
+            "download or merge failed. Is ffmpeg installed? See the errors "
+            "above." % tally["attempted"])
+        sys.exit(3)
+    else:
+        log(state_dir, "WARNING: the channel yielded no videos — nothing was "
+            "downloaded. Check the channel URL/@handle is right, and update "
+            "yt-dlp (`pip install -U yt-dlp`): an outdated yt-dlp can no "
+            "longer read YouTube and returns empty without erroring.")
+        sys.exit(3)
 
 
 def main():
