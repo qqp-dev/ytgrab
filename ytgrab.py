@@ -345,6 +345,11 @@ def run(cfg):
         age = _ytdlp_age_days(yt_dlp.version.__version__)
         logged_out = not (cfg.get("cookies_from_browser") or cfg.get("cookiefile"))
         reasons = ["Check the channel URL/@handle is right."]
+        if not (shutil.which("deno") or shutil.which("node") or shutil.which("bun")):
+            reasons.insert(0, "No JavaScript runtime (deno) is installed — recent "
+                           "yt-dlp needs one to read YouTube, and without it a "
+                           "channel can return empty. Install deno: "
+                           "`curl -fsSL https://deno.land/install.sh | sh`")
         if backoff.hits:
             reasons.append("This run met a rate-limit / bot-check %d time(s) and "
                            "YouTube served no list — set `cookies_from_browser` in "
@@ -408,6 +413,23 @@ def doctor(path):
     checks.append((shutil.which("ffmpeg") is not None, True, "ffmpeg",
                    "not installed — sudo apt install ffmpeg "
                    "(yt-dlp needs it to merge each video's picture and sound)"))
+
+    # Recent yt-dlp needs a JavaScript runtime to read YouTube; deno is its
+    # default. Without one, extraction is degraded and a channel can come back
+    # empty (the failure that looks like "nothing downloaded").
+    if shutil.which("deno"):
+        checks.append((True, True, "deno (JavaScript runtime for YouTube)", ""))
+    elif shutil.which("node") or shutil.which("bun"):
+        other = "node" if shutil.which("node") else "bun"
+        checks.append((False, False,
+                       "JavaScript runtime: %s found, but yt-dlp uses deno by default" % other,
+                       "install deno (`curl -fsSL https://deno.land/install.sh | sh`), "
+                       "or point yt-dlp at %s with its --js-runtimes option" % other))
+    else:
+        checks.append((False, True, "JavaScript runtime (deno) — yt-dlp needs it for YouTube",
+                       "none found — recent yt-dlp needs a JS runtime to read YouTube, "
+                       "and without one a channel can return empty. Install deno: "
+                       "`curl -fsSL https://deno.land/install.sh | sh`"))
 
     checks.append((shutil.which("zenity") is not None, False,
                    "zenity (one-click launcher only)",

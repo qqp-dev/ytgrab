@@ -38,6 +38,11 @@ thin, resilient wrapper around it:
   as separate streams and merges them into one mp4 with ffmpeg; without it
   every video fails at the merge, so ytgrab refuses to start until it is
   installed.
+- A **JavaScript runtime** — `deno` is yt-dlp's default
+  (`curl -fsSL https://deno.land/install.sh | sh`). Recent yt-dlp needs one
+  to read YouTube; without it extraction is degraded and a channel can come
+  back empty (looking like "nothing downloaded"). `node` or `bun` also work
+  but need yt-dlp's `--js-runtimes` option; `deno` needs no configuration.
 
 ## Check your setup
 
