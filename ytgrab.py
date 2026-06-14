@@ -94,6 +94,15 @@ def single_instance_lock(state_dir):
 def run(cfg):
     from yt_dlp import YoutubeDL
 
+    # yt-dlp downloads the best video and best audio as separate streams and
+    # merges them into one mp4 — that merge is ffmpeg's job. Without it, every
+    # video errors at merge time and `ignoreerrors` skips it, so a whole run
+    # would quietly save nothing. Fail loud and early instead.
+    if shutil.which("ffmpeg") is None:
+        sys.exit("ffmpeg is not installed — yt-dlp needs it to merge each "
+                 "video's picture and sound into one mp4. Install it (e.g. "
+                 "`sudo apt install ffmpeg`) and run again.")
+
     out = cfg["output"]
     state_dir = os.path.join(out, ".ytgrab")
     os.makedirs(state_dir, exist_ok=True)
