@@ -4,12 +4,18 @@ slowly, and resumably.
 
 The hard parts are yt-dlp's: a download-archive records every finished
 video so a rerun skips it (exact resume across stops and restarts);
-partial files keep their .part and continue; a sleep between videos keeps
-us politely under any rate limit; a format cap holds quality at <=720p.
+partial files keep their .part and continue; a randomised sleep between
+videos keeps the pace polite; a format cap holds quality at <=720p.
 This wrapper adds the operator's requirements around it — chronological
 (oldest first) order, a single-instance lock so a second start never
 double-runs, a free-space guard that warns instead of crashing, and a
-progress log you can tail.
+progress log you can tail. It also hardens the pacing: real rate-limit
+backoff (when YouTube pushes back with a 429 or a bot-check, it pauses
+and lengthens the gap for the rest of the run, rather than retrying into
+the same wall), a throttled gap between the metadata requests that
+enumerate the channel at the start, and optional browser-cookie auth so a
+run need not be logged out — off by default, because turning it on trusts
+the tool with your YouTube session.
 
 Run:  python3 ytgrab.py            (reads ./config.json)
       python3 ytgrab.py PATH       (reads PATH)
@@ -77,7 +83,18 @@ def load_config(path):
     cfg.setdefault("max_height", 720)
     cfg.setdefault("sleep_min", 8)        # seconds before each video
     cfg.setdefault("sleep_max", 20)       # ... up to this, at random
+    cfg.setdefault("sleep_requests", 2)   # gap between metadata requests —
+                                          # throttles the start-of-run channel
+                                          # enumeration, not just downloads
+    cfg.setdefault("backoff_max", 300)    # ceiling (s) the per-video gap and a
+                                          # rate-limit pause may grow to
     cfg.setdefault("min_free_gb", 2)      # stop before the disk is full
+    # Optional auth so a run need not be logged out. Both default off; turning
+    # either on hands the tool your YouTube session. cookies_from_browser is a
+    # browser name yt-dlp reads cookies live from (e.g. "firefox", "chrome");
+    # cookiefile is a path to an exported cookies.txt.
+    cfg.setdefault("cookies_from_browser", None)
+    cfg.setdefault("cookiefile", None)
     return cfg
 
 
@@ -106,6 +123,97 @@ def single_instance_lock(state_dir):
     fh.write("%d\n" % os.getpid())
     fh.flush()
     return fh
+
+
+class BackoffLogger:
+    """Set as yt-dlp's `logger`, this takes over every line yt-dlp would
+    print, and does two things.
+
+    First, it keeps the quiet run's visible behaviour: warnings and errors go
+    to stderr (so "see the errors above" still holds), the per-byte progress
+    chatter stays hidden. yt-dlp routes screen output to .debug, warnings to
+    .warning, errors to .error.
+
+    Second — the point of it — it catches the one failure the fixed inter-
+    video sleep cannot pace away: a rate-limit or bot-check signal (HTTP 429,
+    "rate-limited", "sign in to confirm you're not a bot", a captcha). A plain
+    retry just walks back into the same wall. The cure is to back off: pause
+    now to let a short-term limit clear, and lengthen the gap before every
+    following video so the run eases off the channel instead of leaning
+    harder. The lengthen works by raising the live YoutubeDL's sleep_interval
+    params, which the downloader re-reads before each video — so it sticks for
+    the rest of the run, not just the next one."""
+
+    SIGNALS = ("429", "too many requests", "rate-limit", "rate limited",
+               "sign in to confirm", "not a bot", "captcha",
+               "this content isn't available, try again later")
+
+    def __init__(self, state_dir, cfg):
+        self.state_dir = state_dir
+        self.cfg = cfg
+        self.ydl = None          # set to the live YoutubeDL once it is built
+        self.hits = 0
+        self._quiet_until = 0    # de-bounce: one 429 fans out into many lines
+
+    def _looks_rate_limited(self, msg):
+        m = msg.lower()
+        return any(s in m for s in self.SIGNALS)
+
+    def _backoff(self, trigger):
+        # A single wall produces a burst of log lines; act once per burst, and
+        # again only after the pause we just took has elapsed.
+        now = time.time()
+        if now < self._quiet_until:
+            return
+        self.hits += 1
+        cap = self.cfg["backoff_max"]
+        params = self.ydl.params if self.ydl is not None else {}
+        lo = params.get("sleep_interval") or self.cfg["sleep_min"]
+        hi = params.get("max_sleep_interval") or self.cfg["sleep_max"]
+        req = params.get("sleep_interval_requests") or self.cfg["sleep_requests"]
+        new_lo, new_hi = min(lo * 2, cap), min(hi * 2, cap)
+        if self.ydl is not None:
+            params["sleep_interval"] = new_lo
+            params["max_sleep_interval"] = new_hi
+            params["sleep_interval_requests"] = min(req * 2, cap)
+        pause = min(new_hi * 2, cap)
+        self._quiet_until = now + pause + 1
+        log(self.state_dir,
+            "rate-limit signal — backing off: pausing %ds now and raising the "
+            "per-video gap to %d-%ds for the rest of the run (hit #%d). "
+            "Trigger: %s" % (pause, new_lo, new_hi, self.hits, trigger[:200]))
+        time.sleep(pause)
+
+    # --- yt-dlp's logger interface ---------------------------------------
+    def debug(self, msg):
+        if self._looks_rate_limited(msg):   # progress chatter — scanned, hidden
+            self._backoff(msg.strip())
+
+    def info(self, msg):
+        if self._looks_rate_limited(msg):
+            self._backoff(msg.strip())
+
+    def warning(self, msg):
+        print(msg, file=sys.stderr, flush=True)
+        if self._looks_rate_limited(msg):
+            self._backoff(msg.strip())
+
+    def error(self, msg):
+        print(msg, file=sys.stderr, flush=True)
+        if self._looks_rate_limited(msg):
+            self._backoff(msg.strip())
+
+
+def cookie_opts(cfg):
+    """The optional auth, off unless the operator set it. Returns the yt-dlp
+    opts that hand it the session — empty when logged out (the default)."""
+    opts = {}
+    browser = cfg.get("cookies_from_browser")
+    if browser:
+        opts["cookiesfrombrowser"] = (browser,)
+    if cfg.get("cookiefile"):
+        opts["cookiefile"] = os.path.expanduser(cfg["cookiefile"])
+    return opts
 
 
 def run(cfg):
@@ -137,6 +245,7 @@ def run(cfg):
     archive = os.path.join(state_dir, "archive.txt")
     h = cfg["max_height"]
     tally = {"file": None, "attempted": 0, "saved": 0}
+    backoff = BackoffLogger(state_dir, cfg)
 
     def hook(d):
         # at the start of each new file, guard the disk; mid-file the OS
@@ -173,17 +282,26 @@ def run(cfg):
         "fragment_retries": 20,
         "sleep_interval": cfg["sleep_min"],      # polite gap before each video
         "max_sleep_interval": cfg["sleep_max"],
-        "sleep_interval_requests": 1,            # and a small gap between API calls
+        "sleep_interval_requests": cfg["sleep_requests"],  # throttle the
+                                                 # metadata requests too, so the
+                                                 # start-of-run channel
+                                                 # enumeration is paced, not a burst
         "progress_hooks": [hook],
+        "logger": backoff,                       # catches 429/bot-check and backs off
         "quiet": True,
         "no_warnings": False,
         "noprogress": True,
     }
+    opts.update(cookie_opts(cfg))
 
-    log(state_dir, "start — channel %s -> %s (<=%dp, %.1f GB free)"
-        % (cfg["channel"], out, h, free_gb(out)))
+    auth = ("%s cookies" % cfg["cookies_from_browser"]
+            if cfg.get("cookies_from_browser") else
+            "cookies file" if cfg.get("cookiefile") else "logged out")
+    log(state_dir, "start — channel %s -> %s (<=%dp, %.1f GB free, %s)"
+        % (cfg["channel"], out, h, free_gb(out), auth))
     try:
         with YoutubeDL(opts) as ydl:
+            backoff.ydl = ydl
             ydl.download([cfg["channel"]])
     except LowSpace:
         log(state_dir, "stopped: under %s GB free — freed space and a "
@@ -191,6 +309,12 @@ def run(cfg):
         sys.exit(2)
     finally:
         lock.close()
+
+    if backoff.hits:
+        log(state_dir, "note: met a rate-limit signal %d time(s) this run and "
+            "backed off each time — the per-video gap was lengthened. If this "
+            "keeps happening, set cookies_from_browser in the config so the "
+            "run is not logged out." % backoff.hits)
 
     # What actually happened — never report success on a no-op. yt-dlp under
     # ignoreerrors swallows extraction failures (a wrong handle, or an

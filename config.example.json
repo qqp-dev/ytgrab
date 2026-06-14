@@ -4,5 +4,9 @@
   "max_height": 720,
   "sleep_min": 8,
   "sleep_max": 20,
-  "min_free_gb": 2
+  "sleep_requests": 2,
+  "backoff_max": 300,
+  "min_free_gb": 2,
+  "cookies_from_browser": null,
+  "cookiefile": null
 }
