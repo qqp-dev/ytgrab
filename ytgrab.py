@@ -339,10 +339,28 @@ def run(cfg):
             "above." % tally["attempted"])
         sys.exit(3)
     else:
+        # Why a run can find nothing — name the likely cause instead of always
+        # blaming yt-dlp, which only misleads when yt-dlp is in fact current.
+        import yt_dlp
+        age = _ytdlp_age_days(yt_dlp.version.__version__)
+        logged_out = not (cfg.get("cookies_from_browser") or cfg.get("cookiefile"))
+        reasons = ["Check the channel URL/@handle is right."]
+        if backoff.hits:
+            reasons.append("This run met a rate-limit / bot-check %d time(s) and "
+                           "YouTube served no list — set `cookies_from_browser` in "
+                           "config.json so the run isn't logged out." % backoff.hits)
+        elif logged_out:
+            reasons.append("A logged-out bulk run can draw a silent bot-check that "
+                           "returns an empty list — set `cookies_from_browser` in "
+                           "config.json to run with your YouTube session.")
+        if age is not None and age > 120:
+            reasons.append("yt-dlp is %d days old — update it (`pip install -U "
+                           "yt-dlp`); a stale yt-dlp reads YouTube empty." % age)
+        elif age is not None:
+            reasons.append("(yt-dlp is current at %d days old, so a stale copy is "
+                           "not the cause.)" % age)
         log(state_dir, "WARNING: the channel yielded no videos — nothing was "
-            "downloaded. Check the channel URL/@handle is right, and update "
-            "yt-dlp (`pip install -U yt-dlp`): an outdated yt-dlp can no "
-            "longer read YouTube and returns empty without erroring.")
+            "downloaded. " + " ".join(reasons))
         sys.exit(3)
 
 
