@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ytgrab
+Comment=Download a YouTube channel — click to start or resume
+Exec=/home/qqp/projects/ytgrab/ytgrab-launch.sh
+Terminal=false
+Icon=folder-download
+Categories=AudioVideo;
